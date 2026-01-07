@@ -158,4 +158,145 @@ def calculate_sm2(row, quality):
         elif repetitions == 1: interval = 6
         else: interval = int(interval * efactor)
         repetitions += 1
-        efactor = max(1.3, efactor + (0.1 - (5 - quality) * (0.08 + (5 -
+        efactor = max(1.3, efactor + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02)))
+    return interval, repetitions, efactor, date.today() + timedelta(days=interval)
+
+def render_stars(count):
+    return "".join([f'<span class="star-yellow">★</span>' if i < count else f'<span class="star-gray">★</span>' for i in range(5)])
+
+def render_tags(tag_list):
+    return "".join([f'<span class="tag-chip">{tag}</span>' for tag in tag_list])
+
+# ==========================================
+# 3. 主界面
+# ==========================================
+df = load_data()
+
+# Header
+c1, c2 = st.columns([3, 1])
+with c1:
+    st.title("Spaced-Repetition Memory System")
+with c2:
+    today_due = len(df[df['next_review'] <= date.today()])
+    st.metric("Due Today", f"{today_due}", delta=f"Total: {len(df)}")
+
+tabs = st.tabs(["Today's Review", "Library & Manage"])
+
+# --- Tab 1: Review ---
+with tabs[0]:
+    due_df = df[df['next_review'] <= date.today()]
+    if due_df.empty:
+        st.success("🎉 All caught up!")
+    else:
+        st.caption("Rate your memory recall (1: Blackout -> 5: Perfect)")
+        st.markdown("---")
+        for _, row in due_df.iterrows():
+            c1, c2, c3, c4, c5 = st.columns([1, 3, 2, 3, 1])
+            with c1: st.markdown(f"**{row['id']}**")
+            with c2: st.markdown(f"[{row['name']}]({row['link']})")
+            with c3: st.markdown(render_tags(row['tags_list']), unsafe_allow_html=True)
+            with c4:
+                cols = st.columns(5)
+                for i in range(1, 6):
+                    if cols[i-1].button(f"{i}", key=f"rev_{row['id']}_{i}", use_container_width=True):
+                        i_new, r_new, ef_new, d_new = calculate_sm2(row, i)
+                        update_card_progress(row['id'], i_new, r_new, ef_new, d_new)
+                        st.toast(f"Reviewed {row['id']}!")
+                        st.rerun()
+            with c5: st.caption(f"x{row['review_count']}")
+            st.markdown("<div class='row-container'></div>", unsafe_allow_html=True)
+
+# --- Tab 2: Library & Add ---
+with tabs[1]:
+    
+    # === Add New Card Section ===
+    with st.expander("➕ Add New Card", expanded=False):
+        c_left, c_right = st.columns([2, 1])
+        
+        with c_left:
+            with st.form("add_card_form", clear_on_submit=True):
+                st.subheader("Add New Card")
+                
+                # Link (Optional)
+                link = st.text_input("LeetCode Link (Optional)", placeholder="https://leetcode.com/problems/...")
+                
+                # ID & Name
+                c_id, c_name = st.columns([1, 3])
+                card_id = c_id.text_input("Problem ID *", placeholder="e.g., 217")
+                card_name = c_name.text_input("Problem Name", placeholder="e.g., Contains Duplicate")
+                
+                # Date & Stars
+                c_date, c_stars = st.columns([1, 1])
+                comp_date = c_date.date_input("Completion Date", value=date.today())
+                stars = c_stars.slider("Difficulty Rating", 1, 5, 3)
+                
+                # Tags - Dropdown
+                all_tags = get_all_tags()
+                selected_tags = st.multiselect("Tags (Select)", options=all_tags)
+                
+                submitted = st.form_submit_button("Save Card", type="primary")
+                
+                if submitted:
+                    if not card_id or not card_name:
+                        st.error("Problem ID and Name are required!")
+                    else:
+                        if add_new_card(card_id, card_name, selected_tags, stars, link, comp_date):
+                            st.success(f"Added {card_name}!")
+                            st.rerun()
+                        else:
+                            st.error(f"Card ID {card_id} already exists!")
+
+        # Create New Tag Section (Right Side)
+        with c_right:
+            st.markdown("<br><br>", unsafe_allow_html=True) # Spacer
+            st.info("💡 Missing a tag?")
+            new_tag_input = st.text_input("Create New Tag", placeholder="e.g., Backtracking")
+            if st.button("Create Tag"):
+                if create_new_tag(new_tag_input):
+                    st.success(f"Tag '{new_tag_input}' created!")
+                    st.rerun()
+                else:
+                    st.warning("Tag already exists or invalid.")
+
+    st.markdown("---")
+
+    # === Library List Section ===
+    st.subheader(f"Library ({len(df)})")
+    
+    # Filters
+    f_col1, f_col2 = st.columns([3, 1])
+    search = f_col1.text_input("🔍 Search", placeholder="Search by ID, Name...")
+    
+    view_df = df.copy()
+    if search:
+        mask = view_df.apply(lambda x: search.lower() in str(x).lower(), axis=1)
+        view_df = view_df[mask]
+
+    # Render List
+    # Header Row
+    h1, h2, h3, h4, h5, h6 = st.columns([1, 2, 3, 2, 2, 1])
+    h1.markdown("**Stars**")
+    h2.markdown("**ID**")
+    h3.markdown("**Name**")
+    h4.markdown("**Tags**")
+    h5.markdown("**Last Review**")
+    h6.markdown("**Action**")
+    st.divider()
+
+    # Data Rows
+    for _, row in view_df.iterrows():
+        c1, c2, c3, c4, c5, c6 = st.columns([1, 2, 3, 2, 2, 1])
+        
+        with c1: st.markdown(render_stars(row['stars']), unsafe_allow_html=True)
+        with c2: st.code(row['id'], language=None)
+        with c3: st.markdown(f"[{row['name']}]({row['link']})")
+        with c4: st.markdown(render_tags(row['tags_list']), unsafe_allow_html=True)
+        with c5: st.write(row['last_review'])
+        with c6:
+            # DELETE BUTTON
+            if st.button("🗑", key=f"del_{row['id']}", help="Delete this card"):
+                delete_card(row['id'])
+                st.toast(f"Deleted {row['id']}")
+                st.rerun()
+        
+        st.markdown("<div class='row-container'></div>", unsafe_allow_html=True)
